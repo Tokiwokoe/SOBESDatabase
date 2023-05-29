@@ -1,11 +1,12 @@
 import sys
 import psycopg2
 import openpyxl
+import datetime
 from PyQt5.QtGui import QPainter
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidgetItem, QGraphicsScene
 from PyQt5.QtChart import QChart, QChartView, QBarSeries, QBarSet, QBarCategoryAxis, QValueAxis
-from UIclass import main_window, LoginScreen, Add, delete, DeleteMessage, worker, add_worker
+from UIclass import main_window, LoginScreen, Add, delete, DeleteMessage, worker, add_worker, accountant, add_help, registry, add_client
 
 
 class AuthWindow(QMainWindow, LoginScreen.Ui_Auth):
@@ -36,11 +37,10 @@ class AuthWindow(QMainWindow, LoginScreen.Ui_Auth):
             elif self.role_group == 'accountant':
                 self.cursor.execute(f"SELECT departament FROM \"accountant\" WHERE login = '{self.user}'")
                 self.departament = self.cursor.fetchone()[0]
-                self.publish_menu = PublishMenu(self.connection, self.cursor, self.current_user, self.departament, self.role_group)
+                self.publish_menu = AccountantMenu(self.connection, self.cursor, self.current_user, self.departament, self.role_group)
                 self.publish_menu.show()
             elif self.role_group == 'registry':
-                self.departament = self.cursor.fetchone()[0]
-                self.shop_menu = ShopMenu(self.connection, self.cursor, self.current_user, self.role_group)
+                self.shop_menu = RegistryMenu(self.connection, self.cursor, self.current_user, self.role_group)
                 self.shop_menu.show()
             else:
                 self.error.setText('Неизвестная роль')
@@ -233,13 +233,10 @@ class Delete(QMainWindow, delete.Ui_Dialog):
             self.table.addItem('Тип клиента')
             self.table.addItem('Бухгалтер')
             self.table.addItem('Регистратура')
-        elif role_group == 'publish_manager':
-            self.table.addItem('Книга')
-            self.table.addItem('Автор')
-            self.table.addItem('Издательство')
-        elif role_group == 'shop_manager':
-            self.table.addItem('Книга в магазине')
-            self.table.addItem('Магазин')
+        elif role_group == 'accountant':
+            self.table.addItem('Выданная помощь')
+        elif role_group == 'registry':
+            self.table.addItem('Клиенты')
         self.OKbutton.clicked.connect(self.to_delete)
 
     def to_delete(self):
@@ -255,6 +252,10 @@ class Delete(QMainWindow, delete.Ui_Dialog):
             self.table_name = '"accountant"'
         elif self.table.currentText() == 'Регистратура':
             self.table_name = '"registry"'
+        elif self.table.currentText() == 'Выданная помощь':
+            self.table_name = '"Help"'
+        elif self.table.currentText() == 'Клиенты':
+            self.table_name = '"Client"'
         id = self.id.text()
         self.message = DeleteMess(self.connection, self.cursor, self.table_name, id)
         self.message.show()
@@ -277,12 +278,12 @@ class AddWorker(PrintTable, worker.Ui_Dialog):
         self.delete_acc.clicked.connect(self.to_delete)
 
     def to_delete(self):
-        self.acc = Delete(self.connection, self.cursor, self.role_group)
-        self.acc.show()
+        self.delete = Delete(self.connection, self.cursor, self.role_group)
+        self.delete.show()
 
     def to_add(self):
-        add = Add(self.connection, self.cursor, role_group='sobes_admin')
-        add.exec_()
+        self.add = AddEmployees(self.connection, self.cursor)
+        self.add.show()
 
     def to_print_reg(self):
         query = 'SELECT id, login FROM "registry" ORDER BY id'
@@ -301,6 +302,170 @@ class AddWorker(PrintTable, worker.Ui_Dialog):
             i += 1
         i = 0
         self.tableWidget_2.resizeColumnsToContents()
+
+
+class AddEmployees(QMainWindow, add_worker.Ui_Dialog):
+    def __init__(self, connection, cursor):
+        super(AddEmployees, self).__init__()
+        self.setupUi(self)
+        self.connection = connection
+        self.cursor = cursor
+        self.table.addItem('Бухгалтер')
+        self.table.addItem('Регистратура')
+        self.table_name = 'accountant'
+        self.table.currentTextChanged.connect(self.handle_table_change)  # Подключение сигнала
+        self.add_button.clicked.connect(self.to_add)
+
+    def handle_table_change(self):
+        if self.table.currentText() == 'Бухгалтер':
+            self.table_name = 'accountant'
+            self.dep.show()
+            self.label_6.show()
+        if self.table.currentText() == 'Регистратура':
+            self.table_name = 'registry'
+            self.dep.hide()
+            self.label_6.hide()
+
+    def to_add(self):
+        self.query = f'SELECT id FROM {self.table_name} ORDER BY id DESC'
+        self.cursor.execute(self.query)
+        self.id = self.cursor.fetchall()
+        if not self.id:
+            self.id = [0]
+        if self.table_name == 'accountant':
+            self.query = f"INSERT INTO {self.table_name} VALUES ({self.id[0]+1}, '{self.log.text()}', {self.dep.text()})"
+        else:
+            self.query = f"INSERT INTO {self.table_name} VALUES ({self.id[0] + 1}, '{self.log.text()}')"
+        try:
+            self.cursor.execute(self.query)
+            self.connection.commit()
+            self.error.setText('Успешно добавлено')
+        except Exception as err:
+            print(err)
+            self.error.setText('Ошибка!')
+
+
+class AccountantMenu(PrintTable, accountant.Ui_Dialog):
+    def __init__(self, connection, cursor, current_user, departament, role_group):
+        super(AccountantMenu, self).__init__()
+        self.setupUi(self)
+        self.connection = connection
+        self.cursor = cursor
+        self.current_user = current_user
+        self.departament = departament
+        self.role_group = role_group
+        self.auth_as.setText(f'Вы вошли как: {current_user}, учреждение № {self.departament}')
+        self.Update_btn.clicked.connect(self.to_print_help)
+        self.Add_btn.clicked.connect(self.to_add_help)
+        self.Delete_btn.clicked.connect(self.to_delete)
+
+    def to_delete(self):
+        self.delete = Delete(self.connection, self.cursor, self.role_group)
+        self.delete.show()
+
+    def to_add_help(self):
+        self.add = AddHelp(self.connection, self.cursor, self.departament)
+        self.add.show()
+
+
+class RegistryMenu(PrintTable, registry.Ui_Dialog):
+    def __init__(self, connection, cursor, current_user, role_group):
+        super(RegistryMenu, self).__init__()
+        self.setupUi(self)
+        self.connection = connection
+        self.cursor = cursor
+        self.current_user = current_user
+        self.role_group = role_group
+        self.auth_as.setText(f'Вы вошли как: {current_user}')
+        self.Update_btn.clicked.connect(self.to_print_client)
+        self.Add_btn.clicked.connect(self.to_add_client)
+        self.Delete_btn.clicked.connect(self.to_delete)
+
+    def to_delete(self):
+        self.delete = Delete(self.connection, self.cursor, self.role_group)
+        self.delete.show()
+
+    def to_add_client(self):
+        self.add = AddClient(self.connection, self.cursor)
+        self.add.show()
+
+
+class AddHelp(QMainWindow, add_help.Ui_Dialog):
+    def __init__(self, connection, cursor, departament):
+        super(AddHelp, self).__init__()
+        self.setupUi(self)
+        self.connection = connection
+        self.cursor = cursor
+        self.departament = departament
+        query = 'SELECT id, name FROM "Client"'
+        self.cursor.execute(query)
+        for t in self.cursor.fetchall():
+            self.client.addItem(str(t))
+        query = 'SELECT id, name FROM "Help_type"'
+        self.cursor.execute(query)
+        for t in self.cursor.fetchall():
+            self.help_type.addItem(str(t))
+        self.Add.clicked.connect(self.correct_data)
+
+    def correct_data(self):
+        money = self.money.text()
+        client = self.client.currentText().replace('(', '').replace(')', '').replace(' \'', '\'').split(',')
+        help_type = self.help_type.currentText().replace('(', '').replace(')', '').replace(' \'', '\'').split(',')
+        client_id = str(client[0])
+        help_type_id = str(help_type[0])
+        if int(money) > 0:
+            try:
+                query = f"INSERT INTO \"Help\" VALUES({client_id}, {self.departament}, {help_type_id}, {money}, '{datetime.date.today()}')"
+                self.cursor.execute(query)
+                self.connection.commit()
+                self.error.setText('Успешно добавлено')
+            except Exception as err:
+                print(err)
+                self.error.setText('Что-то пошло не так :(')
+        else:
+            self.error.setText('Проверьте корректность заполнения полей!')
+
+
+class AddClient(QMainWindow, add_client.Ui_Dialog):
+    def __init__(self, connection, cursor):
+        super(AddClient, self).__init__()
+        self.setupUi(self)
+        self.connection = connection
+        self.cursor = cursor
+        query = 'SELECT id, name FROM "Client_type"'
+        self.cursor.execute(query)
+        for t in self.cursor.fetchall():
+            self.client_type.addItem(str(t))
+        query = 'SELECT id, name FROM "Exemption"'
+        self.cursor.execute(query)
+        for t in self.cursor.fetchall():
+            self.exemption.addItem(str(t))
+        self.Add.clicked.connect(self.correct_data)
+
+    def correct_data(self):
+        name = self.name.text()
+        birth_date = self.birth.text()
+        client_type = self.client_type.currentText().replace('(', '').replace(')', '').replace(' \'', '\'').split(',')
+        exemption = self.exemption.currentText().replace('(', '').replace(')', '').replace(' \'', '\'').split(',')
+        client_type_id = str(client_type[0])
+        exemption_id = str(exemption[0])
+        pension = self.pension.text()
+        if int(pension) > 0:
+            try:
+                query = f'SELECT id FROM "Client" ORDER BY id DESC LIMIT 1'
+                self.cursor.execute(query)
+                self.name_id = self.cursor.fetchone()
+                if not self.name_id:
+                    self.name_id = [0]
+                query = f"INSERT INTO \"Client\" VALUES({int(self.name_id[0])+1}, '{name}', '{birth_date}', {client_type_id}, {pension}, {exemption_id})"
+                self.cursor.execute(query)
+                self.connection.commit()
+                self.error.setText('Успешно добавлено')
+            except Exception as err:
+                print(err)
+                self.error.setText('Что-то пошло не так :(')
+        else:
+            self.error.setText('Проверьте корректность заполнения полей!')
 
 
 if __name__ == '__main__':
